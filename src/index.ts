@@ -69,22 +69,38 @@ export default function register(api: any) {
 
   // Helper to get conversation ID from context
   function pickConversationId(context: any): string {
-    // Log context keys for debugging
+    // Debug: log all possible context fields
     api.logger?.info?.(
-      `[progress-notifier] context keys: conversationId=${context?.conversation?.id}, sessionConversationId=${context?.session?.conversationId}, sessionId=${context?.session?.id}, chatId=${context?.chatId}, chat_id=${context?.chat_id}`
+      `[progress-notifier] raw context snapshot: ${JSON.stringify({
+        conversationId: context?.conversation?.id,
+        sessionConversationId: context?.session?.conversationId,
+        sessionId: context?.session?.id,
+        chat_id: context?.chat_id,
+        chatId: context?.chatId,
+        open_chat_id: context?.open_chat_id,
+        feishuChatId: context?.feishu?.chatId,
+        messageChatId: context?.message?.chat_id,
+        eventChatId: context?.event?.chat_id,
+        eventOpenChatId: context?.event?.open_chat_id,
+      })}`
     );
-    return (
+
+    const result = (
       context?.conversation?.id ||
       context?.session?.conversationId ||
       context?.session?.id ||
-      context?.chatId ||
       context?.chat_id ||
+      context?.chatId ||
+      context?.open_chat_id ||
       context?.feishu?.chatId ||
+      context?.message?.chat_id ||
       context?.event?.chat_id ||
       context?.event?.open_chat_id ||
-      context?.open_chat_id ||
       "default"
     );
+
+    api.logger?.info?.(`[progress-notifier] resolved conversationId=${result}`);
+    return result;
   }
 
   // Helper to get model name from context
