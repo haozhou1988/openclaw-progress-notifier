@@ -10,24 +10,22 @@ import { FeishuPinnedCardStore } from "./feishu/FeishuPinnedCardStore.js";
 import { FeishuPinnedCardService } from "./feishu/FeishuPinnedCardService.js";
 import type { ProgressStatus } from "./state/TaskStateMachine.js";
 
-import { MemoryFeishuPinnedCardAdapter } from "./feishu/persistence/MemoryFeishuPinnedCardAdapter.js";
-import { FileFeishuPinnedCardAdapter } from "./feishu/persistence/FileFeishuPinnedCardAdapter.js";
-
 export default function register(api: any) {
   api.logger.info("[progress-notifier] register() called");
 
+  // Get plugin-specific config from OpenClaw config path
+  const pluginConfig = api?.config?.plugins?.entries?.['progress-notifier']?.config || api?.config?.plugins?.['progress-notifier'] || {};
+  
   const config = {
-    ttlMs: api?.pluginConfig?.ttlMs ?? 600000,
-    defaultStages: api?.pluginConfig?.defaultStages ?? ["start", "research", "draft", "done"],
-    injectPromptContext: api?.pluginConfig?.injectPromptContext ?? true,
-    promptContextLimit: api?.pluginConfig?.promptContextLimit ?? 2,
-    enableScheduledUpdates: api?.pluginConfig?.enableScheduledUpdates ?? false,
-    defaultUpdateIntervalMs: api?.pluginConfig?.defaultUpdateIntervalMs ?? 60000,
-    pushScheduledMessages: api?.pluginConfig?.pushScheduledMessages ?? true,
-    feishuAppId: api?.pluginConfig?.feishuAppId,
-    feishuAppSecret: api?.pluginConfig?.feishuAppSecret,
-    persistenceMode: api?.pluginConfig?.persistenceMode ?? "memory",
-    persistenceDir: api?.pluginConfig?.persistenceDir ?? ".progress-store",
+    ttlMs: pluginConfig.ttlMs ?? 600000,
+    defaultStages: pluginConfig.defaultStages ?? ["start", "research", "draft", "done"],
+    injectPromptContext: pluginConfig.injectPromptContext ?? true,
+    promptContextLimit: pluginConfig.promptContextLimit ?? 2,
+    enableScheduledUpdates: pluginConfig.enableScheduledUpdates ?? false,
+    defaultUpdateIntervalMs: pluginConfig.defaultUpdateIntervalMs ?? 60000,
+    pushScheduledMessages: pluginConfig.pushScheduledMessages ?? true,
+    feishuAppId: pluginConfig.feishuAppId,
+    feishuAppSecret: pluginConfig.feishuAppSecret,
   };
 
   const manager = new ProgressManager(undefined, config);
@@ -42,13 +40,7 @@ export default function register(api: any) {
   const autoProgress = new AutoProgressService(manager, scheduler, pusher);
 
   // Feishu pinned card service
-  const feishuPinnedCardAdapter =
-    config.persistenceMode === "file"
-      ? new FileFeishuPinnedCardAdapter(`${config.persistenceDir ?? ".progress-store"}/feishu-cards`)
-      : new MemoryFeishuPinnedCardAdapter();
-
-  const feishuPinnedCardStore = new FeishuPinnedCardStore(feishuPinnedCardAdapter);
-
+  const feishuPinnedCardStore = new FeishuPinnedCardStore();
   const feishuPinnedCardService =
     config.feishuAppId && config.feishuAppSecret
       ? new FeishuPinnedCardService(
@@ -62,20 +54,9 @@ export default function register(api: any) {
         )
       : null;
 
-  api.logger.info(
-    `[progress-notifier] feishuPinnedCardService enabled=${Boolean(feishuPinnedCardService)}, ` +
-    `feishuAppId=${Boolean(config.feishuAppId)}, feishuAppSecret=${Boolean(config.feishuAppSecret)}`
-  );
-
-  // Helper to get conversation ID from context (fallback)
-  function pickConversationId(context: any): string | undefined {
-    // For Feishu: use a fixed ID to persist pinned cards across calls
-    return "feishu";
-  }
-
-  // Helper to resolve conversation ID from params or context
-  function resolveConversationId(params: any, context: any): string | undefined {
-    return params.conversationId ?? pickConversationId(context);
+  // Helper to get conversation ID from context
+  function pickConversationId(context: any): string {
+    return context?.conversation?.id || context?.session?.conversationId || context?.session?.id || "default";
   }
 
   // Helper to get model name from context
@@ -85,7 +66,7 @@ export default function register(api: any) {
   }
 
   // === progress_update ===
-  api.registerTool({
+   api.registerTool({
     name: "progress_update",
     description: "Use this tool whenever the user asks to create or update task/workflow progress, including progress percentage, percent, status, stage, summary, or metrics. This includes requests such as \u201C\u66f4\u65b0\u8fdb\u5ea6\u201D, \u201Cprogress\u201D, \u201C\u72b6\u6001\u66f4\u65b0\u201D, \u201C\u8fdb\u5ea6\u6539\u6210 80%\u201D, or direct tool-like messages such as `progress_update ...`. Do not answer with plain text when an actual progress update is requested.",
     parameters: Type.Object({
@@ -106,86 +87,44 @@ export default function register(api: any) {
       parentTaskId: Type.Optional(Type.String()),
     }),
     async execute(_id: string, params: UpdateProgressInput, context: any) {
-      // Allow explicit conversationId in params, fallback to context
-      const conversationId = resolveConversationId(params, context);
+      const conversationId = pickConversationId(context);
       const modelName = pickModelName(context, params.model);
-
-      api.logger?.info?.("progress_update.begin", { conversationId, taskId: params.taskId });
 
       const task = await manager.updateTask(conversationId, {
         ...params,
         model: modelName,
       });
 
-      let pinned: any = null;
-      let refreshSucceeded = false;
-      let refreshError: string | undefined;
-
-      // Use params.taskId for lookup (not task.taskId which may be normalized)
-      const lookupTaskId = String(params.taskId).trim();
-
-      // Skip pinned lookup if conversationId is missing
-      if (!conversationId) {
-        api.logger?.warn?.("progress_update.missing_conversation_id", { taskId: lookupTaskId });
-        const rendered = manager.renderTask(task);
-        return {
-          content: [{ type: "text", text: rendered as string }],
-          metadata: {
-            pinned: false,
-            refreshSucceeded: false,
-            warning: "Missing conversationId, skipped pinned card lookup",
-            taskId: lookupTaskId,
-          },
-        };
-      }
-
-      api.logger?.info?.("progress_update.pin_lookup.start", { 
-        conversationId, 
-        taskId: lookupTaskId,
-        paramsTaskId: params.taskId,
-        taskTaskId: task.taskId
-      });
-      
-      pinned = await feishuPinnedCardService.get(conversationId, lookupTaskId);
-
-        api.logger?.info?.("progress_update.pin_lookup.done", { 
-          conversationId, 
-          taskId: lookupTaskId, 
-          found: !!pinned 
-        });
-
+      // Auto-refresh Feishu pinned card if exists
+      if (feishuPinnedCardService) {
+        const pinned = feishuPinnedCardService.get(conversationId, task.taskId);
         if (pinned) {
           try {
-            await feishuPinnedCardService.refresh(conversationId, lookupTaskId, true);
-            refreshSucceeded = true;
-            api.logger?.info?.("progress_update.refresh.ok", { conversationId, taskId: lookupTaskId });
-          } catch (err: any) {
-            refreshError = err?.message ?? String(err);
-            api.logger?.warn?.("progress_update.refresh.failed", { conversationId, taskId: task.taskId, error: refreshError });
+            await feishuPinnedCardService.refresh(conversationId, task.taskId, true);
+          } catch (err) {
+            api.logger?.info?.(
+              `[progress-notifier] failed to refresh Feishu card for ${task.taskId}: ${String(err)}`
+            );
           }
         }
       }
 
-      // Return meaningful text if pinned and refreshed
-      const responseTaskId = String(params.taskId).trim();
-      if (pinned && refreshSucceeded) {
-        return {
-          content: [{ type: "text", text: `进度已更新，飞书卡片已刷新（taskId=${responseTaskId}）` }],
-          metadata: { pinned: true, refreshSucceeded: true, conversationId, taskId: responseTaskId },
-        };
+      // Auto-stop scheduled updates when task is done
+      if (["done", "failed", "canceled"].includes(task.status)) {
+        autoProgress.stop(conversationId, task.taskId);
       }
 
       const rendered = manager.renderTask(task);
 
       return {
         content: [{ type: "text", text: rendered as string }],
-        metadata: { pinned: !!pinned, refreshSucceeded, refreshError, conversationId, taskId: task.taskId },
+        metadata: { conversationId, task },
       };
     },
   });
 
   // === progress_get ===
-  api.registerTool({
+   api.registerTool({
     name: "progress_get",
     description: "Get a task progress record.",
     parameters: Type.Object({
@@ -210,7 +149,7 @@ export default function register(api: any) {
   });
 
   // === progress_list ===
-  api.registerTool({
+   api.registerTool({
     name: "progress_list",
     description: "List task progress records.",
     parameters: Type.Object({
@@ -240,7 +179,7 @@ export default function register(api: any) {
   });
 
   // === progress_clear ===
-  api.registerTool({
+   api.registerTool({
     name: "progress_clear",
     description: "Clear one or all task progress records.",
     parameters: Type.Object({
@@ -262,7 +201,7 @@ export default function register(api: any) {
   });
 
   // === progress_summary ===
-  api.registerTool({
+   api.registerTool({
     name: "progress_summary",
     description: "Summarize a task's progress history.",
     parameters: Type.Object({
@@ -287,7 +226,7 @@ export default function register(api: any) {
   });
 
   // === progress_replay (new) ===
-  api.registerTool({
+   api.registerTool({
     name: "progress_replay",
     description: "Replay a task's full history.",
     parameters: Type.Object({
@@ -327,7 +266,7 @@ export default function register(api: any) {
   });
 
   // === progress_metrics (new) ===
-  api.registerTool({
+   api.registerTool({
     name: "progress_metrics",
     description: "Get task metrics (timing, retries, blocks).",
     parameters: Type.Object({
@@ -364,7 +303,7 @@ export default function register(api: any) {
   });
 
   // === progress_children ===
-  api.registerTool({
+   api.registerTool({
     name: "progress_children",
     description: "List direct child tasks of a parent task.",
     parameters: Type.Object({
@@ -396,7 +335,7 @@ export default function register(api: any) {
   });
 
   // === progress_tree ===
-  api.registerTool({
+   api.registerTool({
     name: "progress_tree",
     description: "Render the task tree for the current conversation or a subtree.",
     parameters: Type.Object({
@@ -428,7 +367,7 @@ export default function register(api: any) {
   });
 
   // === progress_conversations ===
-  api.registerTool({
+   api.registerTool({
     name: "progress_conversations",
     description: "List all persisted conversation IDs.",
     parameters: Type.Object({
@@ -466,7 +405,7 @@ export default function register(api: any) {
   });
 
   // === progress_health ===
-  api.registerTool({
+   api.registerTool({
     name: "progress_health",
     description: "Report plugin health and configuration.",
     parameters: Type.Object({
@@ -488,7 +427,7 @@ export default function register(api: any) {
   });
 
   // === progress_cleanup ===
-  api.registerTool({
+   api.registerTool({
     name: "progress_cleanup",
     description: "Clean expired or empty conversations and optionally rebuild index.",
     parameters: Type.Object({
@@ -515,7 +454,7 @@ export default function register(api: any) {
   });
 
   // === progress_schedule ===
-  api.registerTool({
+   api.registerTool({
     name: "progress_schedule",
     description: "Schedule automatic progress updates for a task",
     parameters: Type.Object({
@@ -546,7 +485,11 @@ export default function register(api: any) {
       }
 
       let success = false;
-      success = autoProgress.start(conversationId, taskId, intervalMs, mode);
+      if (mode === "heartbeat") {
+        success = autoProgress.startHeartbeat(conversationId, taskId, intervalMs);
+      } else {
+        success = autoProgress.startSummary(conversationId, taskId, intervalMs);
+      }
 
       if (success) {
         return {
@@ -561,7 +504,7 @@ export default function register(api: any) {
   });
 
   // === progress_unschedule ===
-  api.registerTool({
+   api.registerTool({
     name: "progress_unschedule",
     description: "Stop scheduled automatic progress updates for a task",
     parameters: Type.Object({
@@ -586,7 +529,7 @@ export default function register(api: any) {
   });
 
   // === progress_pin_card ===
-  api.registerTool({
+   api.registerTool({
     name: "progress_pin_card",
     description: "Use this tool whenever the user wants a Feishu pinned progress card to be created, sent, refreshed, or updated for a task. This includes requests such as \u201C\u521b\u5efa\u8fdb\u5ea6\u5361\u7247\u201D, \u201C\u5237\u65b0\u98de\u4e66\u8fdb\u5ea6\u5361\u7247\u201D, \u201C\u7f6e\u9876\u8fdb\u5ea6\u5361\u7247\u201D, or direct tool-like messages such as `progress_pin_card ...`. Do not reply with explanation-only text if the card action can be executed.",
     parameters: Type.Object({
@@ -609,17 +552,7 @@ export default function register(api: any) {
         };
       }
 
-      // Allow explicit conversationId in params, fallback to context
-      const conversationId = params.conversationId ?? pickConversationId(context);
-
-      api.logger?.info?.("progress_pin_card.begin", { conversationId, taskId: params.taskId });
-
-      if (!conversationId) {
-        return {
-          content: [{ type: "text", text: "缺少 conversationId，无法绑定飞书卡片" }],
-          metadata: { pinned: false },
-        };
-      }
+      const conversationId = pickConversationId(context);
 
       try {
         const result = await feishuPinnedCardService.pin({
@@ -630,17 +563,13 @@ export default function register(api: any) {
           showSummary: params.showSummary ?? true,
         });
 
-        api.logger?.info?.("progress_pin_card.done", { conversationId, taskId: params.taskId, result });
-
         return {
           content: [{
             type: "text",
             text: result.created
-              ? `已为任务创建飞书进度卡片（conversationId=${conversationId}, taskId=${params.taskId}）`
-              : `已刷新任务的飞书进度卡片（conversationId=${conversationId}, taskId=${params.taskId}）`,
+              ? `已为任务 ${params.taskId} 创建飞书进度卡片。`
+              : `已刷新任务 ${params.taskId} 的飞书进度卡片。`,
           }],
-          metadata: { pinned: true, conversationId, taskId: params.taskId, result },
-        };
           metadata: { conversationId, taskId: params.taskId, messageId: result.messageId, created: result.created },
         };
       } catch (err) {
@@ -653,7 +582,7 @@ export default function register(api: any) {
   });
 
   // === progress_unpin_card ===
-  api.registerTool({
+   api.registerTool({
     name: "progress_unpin_card",
     description: "Remove a pinned Feishu progress card mapping for a task.",
     parameters: Type.Object({
@@ -691,7 +620,7 @@ export default function register(api: any) {
   });
 
   // === progress_refresh_card ===
-  api.registerTool({
+   api.registerTool({
     name: "progress_refresh_card",
     description: "Refresh an existing pinned Feishu progress card for a task.",
     parameters: Type.Object({
@@ -726,45 +655,6 @@ export default function register(api: any) {
           metadata: { conversationId, taskId: params.taskId, error: String(err) },
         };
       }
-    },
-  });
-
-  // === progress_card_status ===
-  api.registerTool({
-    name: "progress_card_status",
-    description: "Inspect Feishu pinned card bindings.",
-    parameters: Type.Object({
-      taskId: Type.Optional(Type.String()),
-    }),
-    async execute(_id: string, params: { taskId?: string }, context: any) {
-      if (!feishuPinnedCardService) {
-        return {
-          content: [{ type: "text", text: "当前未配置飞书卡片服务。" }],
-          metadata: { enabled: false },
-        };
-      }
-
-      const conversationId = pickConversationId(context);
-
-      if (params.taskId) {
-        const record = await feishuPinnedCardService.get(conversationId, params.taskId);
-        return {
-          content: [{
-            type: "text",
-            text: record ? JSON.stringify(record, null, 2) : `任务 ${params.taskId} 当前没有飞书卡片绑定。`,
-          }],
-          metadata: { conversationId, taskId: params.taskId, record: record ?? null },
-        };
-      }
-
-      const records = await feishuPinnedCardService.list(conversationId);
-      return {
-        content: [{
-          type: "text",
-          text: records.length > 0 ? JSON.stringify(records, null, 2) : "当前会话没有飞书卡片绑定记录。",
-        }],
-        metadata: { conversationId, count: records.length, records },
-      };
     },
   });
 

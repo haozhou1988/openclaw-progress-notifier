@@ -1,43 +1,36 @@
-import type { FeishuPinnedCardRecord } from "./types.js";
-import type { FeishuPinnedCardPersistenceAdapter } from "./persistence/FeishuPinnedCardPersistenceAdapter.js";
+export interface FeishuPinnedCardRecord {
+  conversationId: string;
+  taskId: string;
+  messageId: string;
+  receiveId: string;
+  receiveIdType: "open_id" | "user_id" | "union_id" | "chat_id" | "email";
+  createdAt: number;
+  updatedAt: number;
+}
 
 export class FeishuPinnedCardStore {
-  constructor(private adapter: FeishuPinnedCardPersistenceAdapter) {}
+  private records = new Map<string, FeishuPinnedCardRecord>();
 
   private key(conversationId: string, taskId: string): string {
-    return `${conversationId}:${taskId}`;
+    return `${conversationId}::${taskId}`;
   }
 
-  async get(conversationId: string, taskId: string): Promise<FeishuPinnedCardRecord | undefined> {
-    const records = await this.adapter.loadAll();
-    return records[this.key(conversationId, taskId)];
+  get(conversationId: string, taskId: string): FeishuPinnedCardRecord | undefined {
+    return this.records.get(this.key(conversationId, taskId));
   }
 
-  async set(record: FeishuPinnedCardRecord): Promise<void> {
-    const records = await this.adapter.loadAll();
-    records[this.key(record.conversationId, record.taskId)] = record;
-    await this.adapter.saveAll(records);
+  set(record: FeishuPinnedCardRecord): void {
+    this.records.set(this.key(record.conversationId, record.taskId), record);
   }
 
-  async delete(conversationId: string, taskId: string): Promise<void> {
-    const records = await this.adapter.loadAll();
-    delete records[this.key(conversationId, taskId)];
-    await this.adapter.saveAll(records);
+  delete(conversationId: string, taskId: string): void {
+    this.records.delete(this.key(conversationId, taskId));
   }
 
-  async list(conversationId?: string): Promise<FeishuPinnedCardRecord[]> {
-    const records = await this.adapter.loadAll();
-    const all = Object.values(records);
-    if (!conversationId) return all.sort((a, b) => b.updatedAt - a.updatedAt);
-    return all
-      .filter(r => r.conversationId === conversationId)
-      .sort((a, b) => b.updatedAt - a.updatedAt);
-  }
-
-  async healthCheck(): Promise<boolean> {
-    if (typeof this.adapter.healthCheck === "function") {
-      return this.adapter.healthCheck();
-    }
-    return true;
+  list(conversationId?: string): FeishuPinnedCardRecord[] {
+    const all = Array.from(this.records.values());
+    return conversationId
+      ? all.filter((r) => r.conversationId === conversationId)
+      : all;
   }
 }

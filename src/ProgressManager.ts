@@ -120,12 +120,6 @@ export class ProgressManager {
     return tasks[taskId];
   }
 
-  async summarizeTask(conversationId: string, taskId: string): Promise<string | undefined> {
-    const task = await this.getTask(conversationId, taskId);
-    if (!task) return undefined;
-    return `[${task.stage}] ${task.label || task.taskId} - ${task.status} (${task.percent ?? 0}%)`;
-  }
-
   async listTasks(conversationId: string, status?: ProgressStatus): Promise<TaskState[]> {
     const tasks = await this.adapter.loadConversation(conversationId);
     this.cleanupExpired(tasks);
@@ -224,18 +218,6 @@ export class ProgressManager {
   async childrenOfTask(conversationId: string, taskId: string): Promise<TaskState[]> {
     const tasks = await this.listTasks(conversationId);
     return this.treeManager.getChildren(tasks, taskId);
-  }
-
-  async metricsForTask(conversationId: string, taskId: string): Promise<any> {
-    const task = await this.getTask(conversationId, taskId);
-    if (!task) return null;
-
-    return {
-      totalDurationMs: task.updatedAt - task.createdAt,
-      updateCount: task.history.length,
-      retryCount: task.history.filter((h: any) => h.status === "retrying").length,
-      blockCount: task.history.filter((h: any) => h.status === "blocked").length,
-    };
   }
 
   async descendantsOfTask(conversationId: string, taskId: string): Promise<TaskState[]> {
