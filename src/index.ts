@@ -4,6 +4,10 @@ import { TaskScheduler } from "./scheduler/TaskScheduler.js";
 import { AutoProgressService } from "./scheduler/AutoProgressService.js";
 import { NoopProgressMessagePusher } from "./scheduler/NoopProgressMessagePusher.js";
 import { ApiProgressMessagePusher } from "./scheduler/ApiProgressMessagePusher.js";
+import { FeishuCardRenderer } from "./feishu/FeishuCardRenderer.js";
+import { FeishuCardPusher } from "./feishu/FeishuCardPusher.js";
+import { FeishuPinnedCardStore } from "./feishu/FeishuPinnedCardStore.js";
+import { FeishuPinnedCardService } from "./feishu/FeishuPinnedCardService.js";
 import type { ProgressStatus } from "./state/TaskStateMachine.js";
 
 export default function register(api: any) {
@@ -17,6 +21,8 @@ export default function register(api: any) {
     enableScheduledUpdates: api?.config?.enableScheduledUpdates ?? false,
     defaultUpdateIntervalMs: api?.config?.defaultUpdateIntervalMs ?? 60000,
     pushScheduledMessages: api?.config?.pushScheduledMessages ?? true,
+    feishuAppId: api?.config?.feishuAppId,
+    feishuAppSecret: api?.config?.feishuAppSecret,
   };
 
   const manager = new ProgressManager(undefined, config);
@@ -29,6 +35,21 @@ export default function register(api: any) {
       : new NoopProgressMessagePusher();
 
   const autoProgress = new AutoProgressService(manager, scheduler, pusher);
+
+  // Feishu pinned card service
+  const feishuPinnedCardStore = new FeishuPinnedCardStore();
+  const feishuPinnedCardService =
+    config.feishuAppId && config.feishuAppSecret
+      ? new FeishuPinnedCardService(
+          manager,
+          new FeishuCardRenderer(),
+          new FeishuCardPusher({
+            appId: config.feishuAppId,
+            appSecret: config.feishuAppSecret,
+          }),
+          feishuPinnedCardStore
+        )
+      : null;
 
   // Helper to get conversation ID from context
   function pickConversationId(context: any): string {
@@ -70,6 +91,25 @@ export default function register(api: any) {
         ...params,
         model: modelName,
       });
+
+      // Auto-refresh Feishu pinned card if exists
+      if (feishuPinnedCardService) {
+        const pinned = feishuPinnedCardService.get(conversationId, task.taskId);
+        if (pinned) {
+          try {
+            await feishuPinnedCardService.refresh(conversationId, task.taskId, true);
+          } catch (err) {
+            api.logger?.info?.(
+              `[progress-notifier] failed to refresh Feishu card for ${task.taskId}: ${String(err)}`
+            );
+          }
+        }
+      }
+
+      // Auto-stop scheduled updates when task is done
+      if (["done", "failed", "canceled"].includes(task.status)) {
+        autoProgress.stop(conversationId, task.taskId);
+      }
 
       const rendered = manager.renderTask(task);
 
@@ -480,6 +520,136 @@ export default function register(api: any) {
       } else {
         return {
           content: [{ type: "text", text: `任务 ${taskId} 没有正在运行的定时更新。` }],
+        };
+      }
+    },
+  });
+
+  // === progress_pin_card ===
+  api.registerTool({
+    name: "progress_pin_card",
+    description: "Send or update a Feishu pinned progress card for a task.",
+    parameters: Type.Object({
+      taskId: Type.String(),
+      receiveId: Type.String(),
+      receiveIdType: Type.Optional(Type.Union([
+        Type.Literal("open_id"),
+        Type.Literal("user_id"),
+        Type.Literal("union_id"),
+        Type.Literal("chat_id"),
+        Type.Literal("email"),
+      ])),
+      showSummary: Type.Optional(Type.Boolean()),
+    }),
+    async execute(_id: string, params: any, context: any) {
+      if (!feishuPinnedCardService) {
+        return {
+          content: [{ type: "text", text: "当前未配置飞书卡片服务，请先配置 feishuAppId 和 feishuAppSecret。" }],
+          metadata: { enabled: false },
+        };
+      }
+
+      const conversationId = pickConversationId(context);
+
+      try {
+        const result = await feishuPinnedCardService.pin({
+          conversationId,
+          taskId: params.taskId,
+          receiveId: params.receiveId,
+          receiveIdType: params.receiveIdType ?? "chat_id",
+          showSummary: params.showSummary ?? true,
+        });
+
+        return {
+          content: [{
+            type: "text",
+            text: result.created
+              ? `已为任务 ${params.taskId} 创建飞书进度卡片。`
+              : `已刷新任务 ${params.taskId} 的飞书进度卡片。`,
+          }],
+          metadata: { conversationId, taskId: params.taskId, messageId: result.messageId, created: result.created },
+        };
+      } catch (err) {
+        return {
+          content: [{ type: "text", text: `为任务 ${params.taskId} 创建/刷新飞书卡片失败：${String(err)}` }],
+          metadata: { conversationId, taskId: params.taskId, error: String(err) },
+        };
+      }
+    },
+  });
+
+  // === progress_unpin_card ===
+  api.registerTool({
+    name: "progress_unpin_card",
+    description: "Remove a pinned Feishu progress card mapping for a task.",
+    parameters: Type.Object({
+      taskId: Type.String(),
+    }),
+    async execute(_id: string, params: any, context: any) {
+      if (!feishuPinnedCardService) {
+        return {
+          content: [{ type: "text", text: "当前未配置飞书卡片服务。" }],
+          metadata: { enabled: false },
+        };
+      }
+
+      const conversationId = pickConversationId(context);
+
+      try {
+        const removed = await feishuPinnedCardService.unpin(conversationId, params.taskId);
+
+        return {
+          content: [{
+            type: "text",
+            text: removed
+              ? `已取消任务 ${params.taskId} 的飞书进度卡片绑定。`
+              : `任务 ${params.taskId} 当前没有已绑定的飞书进度卡片。`,
+          }],
+          metadata: { conversationId, taskId: params.taskId, removed },
+        };
+      } catch (err) {
+        return {
+          content: [{ type: "text", text: `取消任务 ${params.taskId} 的飞书进度卡片绑定失败：${String(err)}` }],
+          metadata: { conversationId, taskId: params.taskId, error: String(err) },
+        };
+      }
+    },
+  });
+
+  // === progress_refresh_card ===
+  api.registerTool({
+    name: "progress_refresh_card",
+    description: "Refresh an existing pinned Feishu progress card for a task.",
+    parameters: Type.Object({
+      taskId: Type.String(),
+      showSummary: Type.Optional(Type.Boolean()),
+    }),
+    async execute(_id: string, params: any, context: any) {
+      if (!feishuPinnedCardService) {
+        return {
+          content: [{ type: "text", text: "当前未配置飞书卡片服务。" }],
+          metadata: { enabled: false },
+        };
+      }
+
+      const conversationId = pickConversationId(context);
+
+      try {
+        const refreshed = await feishuPinnedCardService.refresh(conversationId, params.taskId, params.showSummary ?? true);
+
+        return {
+          content: [{
+            type: "text",
+            text: refreshed
+              ? `已刷新任务 ${params.taskId} 的飞书进度卡片。`
+              : `未找到任务 ${params.taskId} 对应的飞书进度卡片绑定。`,
+          }],
+          metadata: { conversationId, taskId: params.taskId, refreshed },
+        };
+      } catch (err) {
+        return {
+          content: [{ type: "text", text: `刷新任务 ${params.taskId} 的飞书进度卡片失败：${String(err)}` }],
+          metadata: { conversationId, taskId: params.taskId, error: String(err) },
         };
       }
     },

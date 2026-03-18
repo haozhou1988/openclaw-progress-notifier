@@ -142,6 +142,24 @@ export interface PluginConfig {
   enableScheduledUpdates?: boolean;
   defaultUpdateIntervalMs?: number;
   pushScheduledMessages?: boolean;
+  feishuAppId?: string;
+  feishuAppSecret?: string;
+}
+
+export interface PinCardInput {
+  taskId: string;
+  receiveId: string;
+  receiveIdType?: "open_id" | "user_id" | "union_id" | "chat_id" | "email";
+  showSummary?: boolean;
+}
+
+export interface UnpinCardInput {
+  taskId: string;
+}
+
+export interface RefreshCardInput {
+  taskId: string;
+  showSummary?: boolean;
 }
 
 export interface WorkflowMetrics {

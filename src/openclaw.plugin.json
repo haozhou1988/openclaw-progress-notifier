@@ -39,6 +39,12 @@
         "type": "boolean",
         "default": true
       },
+      "feishuAppId": {
+        "type": "string"
+      },
+      "feishuAppSecret": {
+        "type": "string"
+      },
       "persistenceMode": {
         "type": "string",
         "enum": ["memory", "file"],
