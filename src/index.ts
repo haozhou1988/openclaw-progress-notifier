@@ -87,7 +87,7 @@ export default function register(api: any) {
   // === progress_update ===
   api.registerTool({
     name: "progress_update",
-    description: "Create or update staged progress for a task.",
+    description: "Use this tool whenever the user asks to create or update task/workflow progress, including progress percentage, status, stage, summary, or metrics. Do not answer with plain text when an actual progress update is requested.",
     parameters: Type.Object({
       taskId: Type.String(),
       label: Type.String(),
@@ -588,7 +588,7 @@ export default function register(api: any) {
   // === progress_pin_card ===
   api.registerTool({
     name: "progress_pin_card",
-    description: "Send or update a Feishu pinned progress card for a task.",
+    description: "Use this tool whenever the user wants a Feishu pinned progress card to be created, refreshed, or updated for a task. Do not reply with explanation-only text if the card action can be executed.",
     parameters: Type.Object({
       taskId: Type.String(),
       receiveId: Type.String(),
