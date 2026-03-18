@@ -181,7 +181,7 @@ export class FeishuCardRenderer {
   }
 
   private progressBar(percent: number): string {
-    const safe = Math.max(0, Math.min(100, Math.round(percent));
+    const safe = Math.max(0, Math.min(100, Math.round(percent)));
     const filled = Math.round(safe / 10);
     return "█".repeat(filled) + "░".repeat(10 - filled);
   }
