@@ -167,10 +167,11 @@ export default function register(api: any) {
       }
 
       // Return meaningful text if pinned and refreshed
+      const responseTaskId = String(params.taskId).trim();
       if (pinned && refreshSucceeded) {
         return {
-          content: [{ type: "text", text: `进度已更新，飞书卡片已刷新（${task.taskId}）` }],
-          metadata: { pinned: true, refreshSucceeded: true, conversationId, taskId: task.taskId },
+          content: [{ type: "text", text: `进度已更新，飞书卡片已刷新（taskId=${responseTaskId}）` }],
+          metadata: { pinned: true, refreshSucceeded: true, conversationId, taskId: responseTaskId },
         };
       }
 
@@ -636,7 +637,7 @@ export default function register(api: any) {
             type: "text",
             text: result.created
               ? `已为任务创建飞书进度卡片（conversationId=${conversationId}, taskId=${params.taskId}）`
-              : `已刷新任务 ${params.taskId} 的飞书进度卡片。`,
+              : `已刷新任务的飞书进度卡片（conversationId=${conversationId}, taskId=${params.taskId}）`,
           }],
           metadata: { pinned: true, conversationId, taskId: params.taskId, result },
         };
