@@ -120,6 +120,12 @@ export class ProgressManager {
     return tasks[taskId];
   }
 
+  async summarizeTask(conversationId: string, taskId: string): Promise<string | undefined> {
+    const task = await this.getTask(conversationId, taskId);
+    if (!task) return undefined;
+    return `[${task.stage}] ${task.label || task.taskId} - ${task.status} (${task.percent ?? 0}%)`;
+  }
+
   async listTasks(conversationId: string, status?: ProgressStatus): Promise<TaskState[]> {
     const tasks = await this.adapter.loadConversation(conversationId);
     this.cleanupExpired(tasks);

@@ -104,13 +104,11 @@ export class FeishuCardRenderer {
     // Footer update time
     elements.push({ tag: "hr" });
     elements.push({
-      tag: "note",
-      elements: [
-        {
-          tag: "plain_text",
-          content: `更新时间：${updatedText}`,
-        },
-      ],
+      tag: "div",
+      text: {
+        tag: "plain_text",
+        content: `更新时间：${updatedText}`,
+      },
     });
 
     return {

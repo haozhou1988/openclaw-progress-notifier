@@ -17,15 +17,17 @@ export default function register(api: any) {
   api.logger.info("[progress-notifier] register() called");
 
   const config = {
-    ttlMs: api?.config?.ttlMs ?? 600000,
-    defaultStages: api?.config?.defaultStages ?? ["start", "research", "draft", "done"],
-    injectPromptContext: api?.config?.injectPromptContext ?? true,
-    promptContextLimit: api?.config?.promptContextLimit ?? 2,
-    enableScheduledUpdates: api?.config?.enableScheduledUpdates ?? false,
-    defaultUpdateIntervalMs: api?.config?.defaultUpdateIntervalMs ?? 60000,
-    pushScheduledMessages: api?.config?.pushScheduledMessages ?? true,
-    feishuAppId: api?.config?.feishuAppId,
-    feishuAppSecret: api?.config?.feishuAppSecret,
+    ttlMs: api?.pluginConfig?.ttlMs ?? 600000,
+    defaultStages: api?.pluginConfig?.defaultStages ?? ["start", "research", "draft", "done"],
+    injectPromptContext: api?.pluginConfig?.injectPromptContext ?? true,
+    promptContextLimit: api?.pluginConfig?.promptContextLimit ?? 2,
+    enableScheduledUpdates: api?.pluginConfig?.enableScheduledUpdates ?? false,
+    defaultUpdateIntervalMs: api?.pluginConfig?.defaultUpdateIntervalMs ?? 60000,
+    pushScheduledMessages: api?.pluginConfig?.pushScheduledMessages ?? true,
+    feishuAppId: api?.pluginConfig?.feishuAppId,
+    feishuAppSecret: api?.pluginConfig?.feishuAppSecret,
+    persistenceMode: api?.pluginConfig?.persistenceMode ?? "memory",
+    persistenceDir: api?.pluginConfig?.persistenceDir ?? ".progress-store",
   };
 
   const manager = new ProgressManager(undefined, config);
@@ -60,9 +62,29 @@ export default function register(api: any) {
         )
       : null;
 
+  api.logger.info(
+    `[progress-notifier] feishuPinnedCardService enabled=${Boolean(feishuPinnedCardService)}, ` +
+    `feishuAppId=${Boolean(config.feishuAppId)}, feishuAppSecret=${Boolean(config.feishuAppSecret)}`
+  );
+
   // Helper to get conversation ID from context
   function pickConversationId(context: any): string {
-    return context?.conversation?.id || context?.session?.conversationId || context?.session?.id || "default";
+    // Log context keys for debugging
+    api.logger?.info?.(
+      `[progress-notifier] context keys: conversationId=${context?.conversation?.id}, sessionConversationId=${context?.session?.conversationId}, sessionId=${context?.session?.id}, chatId=${context?.chatId}, chat_id=${context?.chat_id}`
+    );
+    return (
+      context?.conversation?.id ||
+      context?.session?.conversationId ||
+      context?.session?.id ||
+      context?.chatId ||
+      context?.chat_id ||
+      context?.feishu?.chatId ||
+      context?.event?.chat_id ||
+      context?.event?.open_chat_id ||
+      context?.open_chat_id ||
+      "default"
+    );
   }
 
   // Helper to get model name from context
@@ -101,12 +123,20 @@ export default function register(api: any) {
         model: modelName,
       });
 
+      let pinned: any = null;
+      let refreshSucceeded = false;
+
       // Auto-refresh Feishu pinned card if exists
       if (feishuPinnedCardService) {
-        const pinned = await feishuPinnedCardService.get(conversationId, task.taskId);
+        pinned = await feishuPinnedCardService.get(conversationId, task.taskId);
+        api.logger?.info?.(
+          `[progress-notifier] progress_update: pinned=${Boolean(pinned)}, conversationId=${conversationId}, taskId=${task.taskId}`
+        );
+
         if (pinned) {
           try {
             await feishuPinnedCardService.refresh(conversationId, task.taskId, true);
+            refreshSucceeded = true;
           } catch (err) {
             api.logger?.info?.(
               `[progress-notifier] failed to refresh Feishu card for ${task.taskId}: ${String(err)}`
@@ -120,11 +150,30 @@ export default function register(api: any) {
         autoProgress.stop(conversationId, task.taskId);
       }
 
+      // Pinned card exists and refresh succeeded: suppress normal progress message to avoid duplicate chat spam.
+      if (pinned && refreshSucceeded) {
+        return {
+          content: [],
+          metadata: {
+            conversationId,
+            task,
+            pinned: true,
+            messageId: pinned.messageId,
+            refreshed: true,
+          },
+        };
+      }
+
       const rendered = manager.renderTask(task);
 
       return {
         content: [{ type: "text", text: rendered as string }],
-        metadata: { conversationId, task },
+        metadata: {
+          conversationId,
+          task,
+          pinned: Boolean(pinned),
+          refreshed: refreshSucceeded,
+        },
       };
     },
   });
@@ -491,11 +540,7 @@ export default function register(api: any) {
       }
 
       let success = false;
-      if (mode === "heartbeat") {
-        success = autoProgress.startHeartbeat(conversationId, taskId, intervalMs);
-      } else {
-        success = autoProgress.startSummary(conversationId, taskId, intervalMs);
-      }
+      success = autoProgress.start(conversationId, taskId, intervalMs, mode);
 
       if (success) {
         return {
