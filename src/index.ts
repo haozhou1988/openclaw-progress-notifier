@@ -131,6 +131,7 @@ export default function register(api: any) {
       parentTaskId: Type.Optional(Type.String()),
     }),
     async execute(_id: string, params: UpdateProgressInput, context: any) {
+      api.logger?.info?.(`[progress-notifier] progress_update EXECUTED, taskId=${params.taskId}`);
       const conversationId = pickConversationId(context);
       const modelName = pickModelName(context, params.model);
 
