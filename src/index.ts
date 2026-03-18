@@ -87,7 +87,7 @@ export default function register(api: any) {
   // === progress_update ===
   api.registerTool({
     name: "progress_update",
-    description: "Use this tool whenever the user asks to create or update task/workflow progress, including progress percentage, status, stage, summary, or metrics. Do not answer with plain text when an actual progress update is requested.",
+    description: "Use this tool whenever the user asks to create or update task/workflow progress, including progress percentage, percent, status, stage, summary, or metrics. This includes requests such as \u201C\u66f4\u65b0\u8fdb\u5ea6\u201D, \u201Cprogress\u201D, \u201C\u72b6\u6001\u66f4\u65b0\u201D, \u201C\u8fdb\u5ea6\u6539\u6210 80%\u201D, or direct tool-like messages such as `progress_update ...`. Do not answer with plain text when an actual progress update is requested.",
     parameters: Type.Object({
       taskId: Type.String(),
       label: Type.String(),
@@ -588,7 +588,7 @@ export default function register(api: any) {
   // === progress_pin_card ===
   api.registerTool({
     name: "progress_pin_card",
-    description: "Use this tool whenever the user wants a Feishu pinned progress card to be created, refreshed, or updated for a task. Do not reply with explanation-only text if the card action can be executed.",
+    description: "Use this tool whenever the user wants a Feishu pinned progress card to be created, sent, refreshed, or updated for a task. This includes requests such as \u201C\u521b\u5efa\u8fdb\u5ea6\u5361\u7247\u201D, \u201C\u5237\u65b0\u98de\u4e66\u8fdb\u5ea6\u5361\u7247\u201D, \u201C\u7f6e\u9876\u8fdb\u5ea6\u5361\u7247\u201D, or direct tool-like messages such as `progress_pin_card ...`. Do not reply with explanation-only text if the card action can be executed.",
     parameters: Type.Object({
       taskId: Type.String(),
       receiveId: Type.String(),
