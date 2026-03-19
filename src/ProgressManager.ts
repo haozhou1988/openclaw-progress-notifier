@@ -9,6 +9,7 @@ import type { OutputMode } from "./types.js";
 export interface UpdateProgressInput {
   taskId: string;
   label: string;
+  weight?: number;
   percent?: number;
   stage?: string;
   model?: string;
@@ -41,6 +42,18 @@ export class ProgressManager {
   private normalizePercent(percent?: number): number | undefined {
     if (percent === undefined || percent === null || Number.isNaN(percent)) return undefined;
     return Math.max(0, Math.min(100, Math.round(percent)));
+  }
+
+  private normalizeWeight(weight?: number): number | undefined {
+    if (
+      weight === undefined ||
+      weight === null ||
+      Number.isNaN(weight) ||
+      !Number.isFinite(weight)
+    ) {
+      return undefined;
+    }
+    return weight > 0 ? weight : undefined;
   }
 
   private inferPercentFromStage(stage?: string): number | undefined {
@@ -89,14 +102,19 @@ export class ProgressManager {
     const children = this.childTasks(tasks, taskId);
 
     if (children.length > 0) {
-      const childPercents = children
-        .map((child) => this.computeDerivedPercent(child.taskId, tasks, visiting))
-        .filter((value): value is number => value !== undefined);
+      const childProgress = children
+        .map((child) => ({
+          percent: this.computeDerivedPercent(child.taskId, tasks, visiting),
+          weight: this.normalizeWeight(child.weight) ?? 1,
+        }))
+        .filter((value): value is { percent: number; weight: number } => value.percent !== undefined);
 
-      if (childPercents.length > 0) {
+      if (childProgress.length > 0) {
+        const totalWeight = childProgress.reduce((sum, child) => sum + child.weight, 0);
         visiting.delete(taskId);
         return this.normalizePercent(
-          childPercents.reduce((sum, value) => sum + value, 0) / childPercents.length
+          childProgress.reduce((sum, child) => sum + child.percent * child.weight, 0) /
+            Math.max(1, totalWeight)
         );
       }
     }
@@ -234,6 +252,8 @@ export class ProgressManager {
     }
 
     const total = children.length;
+    const usesWeightedProgress = children.some((child) => (this.normalizeWeight(child.weight) ?? 1) !== 1);
+    const derivedPercent = this.computeDerivedPercent(parent.taskId, tasks);
     const counts = {
       done: children.filter((child) => child.status === "done").length,
       running: children.filter((child) => child.status === "running").length,
@@ -245,7 +265,9 @@ export class ProgressManager {
     };
 
     if (counts.done === total) {
-      return `全部 ${total} 个子任务已完成`;
+      return usesWeightedProgress && derivedPercent !== undefined
+        ? `已完成 ${derivedPercent}%（按权重），全部 ${total} 个子任务已完成`
+        : `全部 ${total} 个子任务已完成`;
     }
 
     const parts = [`${counts.done}/${total} 子任务已完成`];
@@ -256,6 +278,10 @@ export class ProgressManager {
     if (counts.failed > 0) parts.push(`${counts.failed} 个失败`);
     if (counts.queued > 0) parts.push(`${counts.queued} 个待开始`);
     if (counts.canceled > 0) parts.push(`${counts.canceled} 个已取消`);
+
+    if (usesWeightedProgress && derivedPercent !== undefined) {
+      parts.unshift(`已完成 ${derivedPercent}%（按权重）`);
+    }
 
     return parts.join("，");
   }
@@ -325,6 +351,7 @@ export class ProgressManager {
       : (input.status ?? "running");
 
     const inputPercent = this.normalizePercent(input.percent);
+    const inputWeight = this.normalizeWeight(input.weight);
     const percent = inputPercent ?? this.inferPercentFromStage(input.stage);
 
     const event: ProgressEvent = {
@@ -340,6 +367,7 @@ export class ProgressManager {
       ? {
           ...existing,
           label: input.label,
+          weight: inputWeight ?? existing.weight,
           percent: percent ?? existing.percent,
           stage: input.stage ?? existing.stage,
           model: input.model ?? existing.model,
@@ -354,6 +382,7 @@ export class ProgressManager {
           conversationId,
           parentTaskId: input.parentTaskId,
           label: input.label,
+          weight: inputWeight,
           percent,
           stage: input.stage,
           model: input.model,
@@ -454,6 +483,7 @@ export class ProgressManager {
         `Status=${task.status}`,
       ];
       if (task.stage) parts.push(`Stage=${task.stage}`);
+      if (task.weight !== undefined) parts.push(`Weight=${task.weight}`);
       if (task.percent !== undefined) parts.push(`Percent=${task.percent}`);
       parts.push(`Label=${task.label}`);
       if (deduped.length) parts.push(`Trail=${deduped.join("->")}`);
